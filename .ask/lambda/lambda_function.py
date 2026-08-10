@@ -14,8 +14,8 @@ import time
 # Set your OpenRouter API key
 api_key = os.environ.get("OPENROUTER_API_KEY", os.environ.get("CLAUDE_API_KEY", "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"))
 
-primary_model = "anthropic/claude-haiku-4.5"
-fallback_model = "anthropic/claude-3-haiku"
+primary_model = "anthropic/claude-3-haiku"
+fallback_model = "anthropic/claude-3.5-haiku"
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -41,26 +41,32 @@ class LaunchRequestHandler(AbstractRequestHandler):
         )
 
 class ClaudeQueryIntentHandler(AbstractRequestHandler):
-    """Handler for Claude Query Intent."""
+    """Handler for Claude Query Intent and Fallback Intent."""
     def can_handle(self, handler_input):
         # type: (HandlerInput) -> bool
         return (ask_utils.is_intent_name("ClaudeQueryIntent")(handler_input) or 
                 ask_utils.is_intent_name("GeminiQueryIntent")(handler_input) or 
-                ask_utils.is_intent_name("GptQueryIntent")(handler_input))
+                ask_utils.is_intent_name("GptQueryIntent")(handler_input) or
+                ask_utils.is_intent_name("AMAZON.FallbackIntent")(handler_input))
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        query = handler_input.request_envelope.request.intent.slots["query"].value
+        query = None
+        req = handler_input.request_envelope.request
+        if hasattr(req, "intent") and req.intent and hasattr(req.intent, "slots") and req.intent.slots:
+            if "query" in req.intent.slots and req.intent.slots["query"].value:
+                query = req.intent.slots["query"].value
+                
+        if not query:
+            query = "Hello, what can you do?"
 
         session_attr = handler_input.attributes_manager.session_attributes
         if "chat_history" not in session_attr:
             session_attr["chat_history"] = []
             session_attr["last_context"] = None
         
-        # Process the query to determine if it's a follow-up question
         processed_query, is_followup = process_followup_question(query, session_attr.get("last_context"))
         
-        # Generate response with enhanced context handling
         response_data = generate_claude_response(session_attr["chat_history"], processed_query, is_followup)
         
         if isinstance(response_data, tuple) and len(response_data) == 2:
@@ -107,7 +113,7 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
 
     def handle(self, handler_input, exception):
         # type: (HandlerInput, Exception) -> Response
-        logger.error(exception, exc_info=True)
+        logger.error(f"Error caught in CatchAllExceptionHandler: {str(exception)}", exc_info=True)
 
         speak_output = "Sorry, I had trouble doing what you asked. Please try again."
 
@@ -208,7 +214,7 @@ def generate_claude_response(chat_history, new_question, is_followup=False):
                 
         # If primary failed, try fallback model
         if not response or not response.ok:
-            logger.warning(f"Primary model {primary_model} failed. Falling back to {fallback_model}...")
+            logger.warning(f"Primary model {primary_model} failed (Status: {response.status_code if response else 'None'}). Falling back to {fallback_model}...")
             payload["model"] = fallback_model
             response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
             
@@ -228,6 +234,7 @@ def generate_claude_response(chat_history, new_question, is_followup=False):
             return response_text, followup_questions
         else:
             error_msg = response_data.get('error', {}).get('message', response.text)
+            logger.error(f"OpenRouter Error ({response.status_code}): {error_msg}")
             return f"Error {response.status_code}: {error_msg}", []
     except Exception as e:
         logger.error(f"Error generating response: {str(e)}")

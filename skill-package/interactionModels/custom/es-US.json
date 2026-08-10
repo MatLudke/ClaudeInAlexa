@@ -4,15 +4,23 @@
       "invocationName": "claude",
       "intents": [
         {
-          "name": "GeminiQueryIntent",
+          "name": "ClaudeQueryIntent",
           "slots": [
             {
               "name": "query",
-              "type": "AMAZON.Person"
+              "type": "AMAZON.SearchQuery"
             }
           ],
           "samples": [
-            "{query}"
+            "ask claude {query}",
+            "tell me {query}",
+            "what is {query}",
+            "how to {query}",
+            "explain {query}",
+            "search for {query}",
+            "why {query}",
+            "who is {query}",
+            "tell {query}"
           ]
         },
         {
@@ -29,6 +37,10 @@
         },
         {
           "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
           "samples": []
         }
       ],
