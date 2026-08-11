@@ -3,137 +3,137 @@
     "publishingInformation": {
       "locales": {
         "en-US": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "en-GB": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "en-CA": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "en-IN": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "en-AU": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "es-ES": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "es-MX": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "es-US": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "fr-FR": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "fr-CA": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "ja-JP": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "de-DE": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "it-IT": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "hi-IN": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         },
         "pt-BR": {
-          "name": "claude",
-          "summary": "Claude in Alexa",
-          "description": "Alexa skill powered by Claude Haiku 4.5 via OpenRouter API",
+          "name": "claude ai",
+          "summary": "Claude AI in Alexa",
+          "description": "Alexa skill powered by Claude Haiku via OpenRouter API",
           "examplePhrases": [
-            "Alexa open claude"
+            "Alexa open claude ai"
           ],
           "keywords": []
         }

@@ -28,7 +28,7 @@ class LaunchRequestHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speak_output = "Claude mode activated"
+        speak_output = "Claude AI mode activated"
 
         session_attr = handler_input.attributes_manager.session_attributes
         session_attr["chat_history"] = []
@@ -48,7 +48,7 @@ class HelpIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speak_output = "Claude mode activated. You can ask me any question you like. What would you like to know?"
+        speak_output = "Claude AI mode activated. You can ask me any question you like. What would you like to know?"
 
         return (
             handler_input.response_builder
