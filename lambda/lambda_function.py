@@ -11,11 +11,20 @@ import json
 import re
 import time
 
-# Set your OpenRouter API key
-api_key = os.environ.get("OPENROUTER_API_KEY", os.environ.get("CLAUDE_API_KEY", ""))
+# Load .env file if present locally or bundled in Lambda
+env_file_path = os.path.join(os.path.dirname(__file__), ".env")
+if os.path.exists(env_file_path):
+    with open(env_file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ[k.strip()] = v.strip()
 
-primary_model = "anthropic/claude-3-haiku"
-fallback_model = "anthropic/claude-3.5-haiku"
+poe_api_key = os.environ.get("POE_API_KEY", "")
+openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
+primary_model = os.environ.get("PRIMARY_MODEL", "GPT-5.6-Luna")
+fallback_model = os.environ.get("FALLBACK_MODEL", "anthropic/claude-3-haiku")
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -205,18 +214,10 @@ def generate_followup_questions(conversation_context, query, response_text, coun
     """Returns concise follow-up question suggestions without extra API calls to save quota."""
     return ["Tell me more", "Explain in detail"]
 
-def generate_claude_response(chat_history, new_question, is_followup=False):
-    """Generates a Claude response via OpenRouter API with retry and fallback handling."""
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/MatLudke/ClaudeInAlexa",
-        "X-Title": "Claude Alexa Skill"
-    }
-    
+def generate_ai_response(chat_history, new_question, is_followup=False):
+    """Generates an AI response using Poe API (GPT-5.6-Luna) or OpenRouter fallback."""
     system_message = (
-        "You are Claude, an AI voice assistant responding out loud through an Alexa device. "
+        "You are an AI voice assistant responding out loud through an Alexa device. "
         "Follow these strict rules for your response format:\n"
         "1. Write exclusively for SPOKEN voice output (Text-To-Speech). Use natural, conversational, fluid prose that sounds great when spoken out loud.\n"
         "2. Do NOT use markdown syntax, headers (#), bullet points (-), numbered lists, bold (**), italics (*), or visual list formatting.\n"
@@ -236,56 +237,66 @@ def generate_claude_response(chat_history, new_question, is_followup=False):
     # Add the new question
     messages.append({"role": "user", "content": new_question})
     
-    payload = {
-        "model": primary_model,
-        "messages": messages,
-        "max_tokens": 2048,
-        "temperature": 0.7
-    }
-    
-    try:
-        response = None
-        for attempt in range(2):
-            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
-            if response.ok:
-                break
-            elif response.status_code in [429, 502, 503, 504]:
-                logger.warning(f"Got status {response.status_code} on attempt {attempt+1}. Sleeping 1.5s...")
-                time.sleep(1.5)
+    # Attempt 1: Poe API
+    if poe_api_key:
+        poe_url = "https://api.poe.com/v1/chat/completions"
+        poe_headers = {
+            "Authorization": f"Bearer {poe_api_key}",
+            "Content-Type": "application/json"
+        }
+        poe_payload = {
+            "model": primary_model,
+            "messages": messages,
+            "temperature": 0.7
+        }
+        try:
+            logger.info(f"Attempting Poe API with model {primary_model}...")
+            res = requests.post(poe_url, headers=poe_headers, json=poe_payload, timeout=15)
+            if res.ok:
+                res_data = res.json()
+                choices = res_data.get('choices', [])
+                if choices:
+                    raw_text = choices[0].get('message', {}).get('content', '')
+                    return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
             else:
-                break
-                
-        # If primary failed, try fallback model
-        if not response or not response.ok:
-            logger.warning(f"Primary model {primary_model} failed (Status: {response.status_code if response else 'None'}). Falling back to {fallback_model}...")
-            payload["model"] = fallback_model
-            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
-            
-        response_data = response.json()
-        if response.ok:
-            choices = response_data.get('choices', [])
-            if choices:
-                raw_text = choices[0].get('message', {}).get('content', '')
-                response_text = clean_text_for_speech(raw_text)
-            else:
-                response_text = "No response choices returned from Claude."
-            
-            followup_questions = generate_followup_questions(
-                chat_history + [(new_question, response_text)], 
-                new_question, 
-                response_text
-            )
-            return response_text, followup_questions
-        else:
-            error_msg = response_data.get('error', {}).get('message', response.text)
-            logger.error(f"OpenRouter Error ({response.status_code}): {error_msg}")
-            return f"Error {response.status_code}: {error_msg}", []
-    except Exception as e:
-        logger.error(f"Error generating response: {str(e)}")
-        return f"Error generating response: {str(e)}", []
+                logger.warning(f"Poe API returned status {res.status_code}: {res.text[:200]}")
+        except Exception as e:
+            logger.error(f"Error calling Poe API: {e}")
 
-generate_gemini_response = generate_claude_response
-generate_gpt_response = generate_claude_response
+    # Attempt 2: OpenRouter Fallback
+    if openrouter_api_key:
+        or_url = "https://openrouter.ai/api/v1/chat/completions"
+        or_headers = {
+            "Authorization": f"Bearer {openrouter_api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/MatLudke/ClaudeInAlexa",
+            "X-Title": "Alexa AI Skill"
+        }
+        or_payload = {
+            "model": fallback_model,
+            "messages": messages,
+            "max_tokens": 2048,
+            "temperature": 0.7
+        }
+        try:
+            logger.info(f"Attempting OpenRouter API fallback with model {fallback_model}...")
+            res = requests.post(or_url, headers=or_headers, json=or_payload, timeout=15)
+            if res.ok:
+                res_data = res.json()
+                choices = res_data.get('choices', [])
+                if choices:
+                    raw_text = choices[0].get('message', {}).get('content', '')
+                    return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
+            else:
+                logger.warning(f"OpenRouter API returned status {res.status_code}: {res.text[:200]}")
+        except Exception as e:
+            logger.error(f"Error calling OpenRouter API: {e}")
+
+    return "I'm sorry, I'm having trouble connecting to the AI model right now. Please check your Poe subscription or API key.", ["Try again"]
+
+generate_claude_response = generate_ai_response
+generate_gemini_response = generate_ai_response
+generate_gpt_response = generate_ai_response
 
 class ClearContextIntentHandler(AbstractRequestHandler):
     """Handler for clearing conversation context."""
