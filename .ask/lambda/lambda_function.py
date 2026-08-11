@@ -23,7 +23,7 @@ if os.path.exists(env_file_path):
 
 poe_api_key = os.environ.get("POE_API_KEY", "")
 openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
-primary_model = os.environ.get("PRIMARY_MODEL", "GPT-5.6-Luna")
+primary_model = os.environ.get("PRIMARY_MODEL", "claude-haiku-4.5")
 fallback_model = os.environ.get("FALLBACK_MODEL", "anthropic/claude-3-haiku")
 
 logger = logging.getLogger(__name__)
