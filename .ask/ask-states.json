@@ -4,17 +4,17 @@
     "default": {
       "deploymentStatus": "COMPLETE",
       "skillMetadata": {
-        "lastImportId": "amzn1.ask-package.import.4f4b01c5-00f0-42ff-afcb-76a2b6e23e24",
-        "lastImportTimestamp": "2026-08-10T23:53:46.186Z",
-        "lastDeployHash": "xLQ1rwuBBD3xezRGrmsJKOvLkXs=",
+        "lastImportId": "amzn1.ask-package.import.4c3ed540-c6be-434c-9a33-41ad99cf3b55",
+        "lastImportTimestamp": "2026-08-11T11:41:18.155Z",
+        "lastDeployHash": "K3lGSLAmNrDWOvgivWbPyQd2LZ8=",
         "lastDeployType": "interaction-model"
       },
       "skillId": "amzn1.ask.skill.cf1a5d06-16da-440b-a27e-4f6b7c565f70",
       "code": {
         "default": {
-          "lastDeployHash": "AePe7asiDUeI3hhkXSVvcjwxIyg="
+          "lastDeployHash": "V5muDpkYDEfWb5eszR7MEWXDth4="
         },
-        "lastDeployTimestamp": "2026-08-10T23:56:32.237Z"
+        "lastDeployTimestamp": "2026-08-11T11:44:28.618Z"
       },
       "skillInfrastructure": {
         "@ask-cli/lambda-deployer": {
@@ -22,8 +22,8 @@
             "default": {
               "lambda": {
                 "arn": "arn:aws:lambda:us-east-1:438546837341:function:ask-claude-default-default-1786386146383",
-                "lastModified": "2026-08-10T23:56:31.000+0000",
-                "revisionId": "3f624c08-68fb-47d8-a402-160e77a761cb"
+                "lastModified": "2026-08-11T11:44:27.000+0000",
+                "revisionId": "5e42b819-54a1-498a-89ed-f80da5aa6655"
               },
               "iamRole": "arn:aws:iam::438546837341:role/ask-lambda-claude-1786386145596"
             }

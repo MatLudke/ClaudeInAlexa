@@ -8,19 +8,23 @@
           "slots": [
             {
               "name": "query",
-              "type": "AMAZON.SearchQuery"
+              "type": "AMAZON.Person"
             }
           ],
           "samples": [
-            "ask claude {query}",
-            "tell me {query}",
-            "what is {query}",
-            "how to {query}",
-            "explain {query}",
-            "search for {query}",
-            "why {query}",
-            "who is {query}",
-            "tell {query}"
+            "{query}"
+          ]
+        },
+        {
+          "name": "GeminiQueryIntent",
+          "slots": [
+            {
+              "name": "query",
+              "type": "AMAZON.Person"
+            }
+          ],
+          "samples": [
+            "{query}"
           ]
         },
         {
