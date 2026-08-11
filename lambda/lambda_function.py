@@ -12,7 +12,7 @@ import re
 import time
 
 # Set your OpenRouter API key
-api_key = os.environ.get("OPENROUTER_API_KEY", os.environ.get("CLAUDE_API_KEY", "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"))
+api_key = os.environ.get("OPENROUTER_API_KEY", os.environ.get("CLAUDE_API_KEY", ""))
 
 primary_model = "anthropic/claude-3-haiku"
 fallback_model = "anthropic/claude-3.5-haiku"
