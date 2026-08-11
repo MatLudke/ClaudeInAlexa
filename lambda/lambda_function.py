@@ -178,6 +178,25 @@ def process_followup_question(question, last_context):
     
     return question, is_followup
 
+def clean_text_for_speech(text):
+    """Sanitizes text so Alexa reads it naturally out loud without markdown formatting artifacts."""
+    if not text:
+        return ""
+    # Strip stage direction prefixes (e.g. "in a friendly, conversational tone", "[spoken out loud]")
+    text = re.sub(r'^(?:in a\s+[a-z\s,]+tone|\[[^\]]+\]|\([^\)]+\))\s*', '', text, flags=re.IGNORECASE)
+    # Strip markdown headers (### Header -> Header)
+    text = re.sub(r'#+\s*', '', text)
+    # Strip bold/italic markdown (**text**, *text*, __text__, _text_)
+    text = re.sub(r'[\*_]{1,3}([^\*_]+)[\*_]{1,3}', r'\1', text)
+    # Strip bullet points and list markers at start of line
+    text = re.sub(r'^\s*[\-\*\+]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
+    # Strip code block backticks
+    text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)
+    # Convert multiple spaces or newlines to single space
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
 def extract_context(question, response):
     """Extracts the main context from a Q&A pair for future reference"""
     return {"question": question, "response": response}
@@ -196,9 +215,15 @@ def generate_claude_response(chat_history, new_question, is_followup=False):
         "X-Title": "Claude Alexa Skill"
     }
     
-    system_message = "You are a helpful assistant powered by Claude. Provide clear, comprehensive, and up-to-date answers. Feel free to explain in detail."
+    system_message = (
+        "You are Claude, an AI voice assistant responding out loud through an Alexa device. "
+        "Follow these strict rules for your response format:\n"
+        "1. Write exclusively for SPOKEN voice output (Text-To-Speech). Use natural, conversational, fluid prose that sounds great when spoken out loud.\n"
+        "2. Do NOT use markdown syntax, headers (#), bullet points (-), numbered lists, bold (**), italics (*), or visual list formatting.\n"
+        "3. Keep answers clear, engaging, and concise (about 2 to 4 sentences, or a well-paced single short paragraph). Provide rich detail without being overly verbose or overwhelming for a listener."
+    )
     if is_followup:
-        system_message += " This is a follow-up question to the previous conversation. Maintain context without repeating information already provided."
+        system_message += " This is a follow-up question. Answer directly and concisely, building naturally on the context."
     
     messages = [{"role": "system", "content": system_message}]
     
@@ -240,7 +265,8 @@ def generate_claude_response(chat_history, new_question, is_followup=False):
         if response.ok:
             choices = response_data.get('choices', [])
             if choices:
-                response_text = choices[0].get('message', {}).get('content', '')
+                raw_text = choices[0].get('message', {}).get('content', '')
+                response_text = clean_text_for_speech(raw_text)
             else:
                 response_text = "No response choices returned from Claude."
             
