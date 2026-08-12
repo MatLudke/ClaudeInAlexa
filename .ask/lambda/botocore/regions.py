@@ -16,15 +16,22 @@ This module implements endpoint resolution, including resolving endpoints for a
 given service and region and resolving the available endpoints for a service
 in a specific AWS partition.
 """
+
 import copy
 import logging
 import re
 from enum import Enum
 
+import jmespath
+
 from botocore import UNSIGNED, xform_name
-from botocore.auth import AUTH_TYPE_MAPS, HAS_CRT
+from botocore.auth import (
+    AUTH_TYPE_MAPS,
+    HAS_CRT,
+    resolve_auth_scheme_preference,
+)
 from botocore.crt import CRT_SUPPORTED_AUTH_TYPES
-from botocore.endpoint_provider import EndpointProvider
+from botocore.endpoint_provider import S3_UNREFERENCED_PARAMS, EndpointProvider
 from botocore.exceptions import (
     EndpointProviderError,
     EndpointVariantError,
@@ -41,6 +48,7 @@ from botocore.exceptions import (
     UnsupportedS3ControlArnError,
     UnsupportedS3ControlConfigurationError,
 )
+from botocore.useragent import register_feature_id
 from botocore.utils import ensure_boolean, instance_cache
 
 LOG = logging.getLogger(__name__)
@@ -261,7 +269,7 @@ class EndpointResolver(BaseEndpointResolver):
         ):
             error_msg = (
                 "Dualstack endpoints are currently not supported"
-                " for %s partition" % partition_name
+                f" for {partition_name} partition"
             )
             raise EndpointVariantError(tags=['dualstack'], error_msg=error_msg)
 
@@ -357,8 +365,8 @@ class EndpointResolver(BaseEndpointResolver):
 
         if endpoint_data.get('deprecated'):
             LOG.warning(
-                'Client is configured with the deprecated endpoint: %s'
-                % (endpoint_name)
+                'Client is configured with the deprecated endpoint: %s',
+                endpoint_name,
             )
 
         service_defaults = service_data.get('defaults', {})
@@ -430,10 +438,10 @@ class EndpointResolverBuiltins(str, Enum):
     # Whether the UseDualStackEndpoint configuration option has been enabled
     # for the SDK client (bool)
     AWS_USE_DUALSTACK = "AWS::UseDualStack"
-    # Whether the global endpoint should be used with STS, rather the the
+    # Whether the global endpoint should be used with STS, rather than the
     # regional endpoint for us-east-1 (bool)
     AWS_STS_USE_GLOBAL_ENDPOINT = "AWS::STS::UseGlobalEndpoint"
-    # Whether the global endpoint should be used with S3, rather then the
+    # Whether the global endpoint should be used with S3, rather than the
     # regional endpoint for us-east-1 (bool)
     AWS_S3_USE_GLOBAL_ENDPOINT = "AWS::S3::UseGlobalEndpoint"
     # Whether S3 Transfer Acceleration has been requested (bool)
@@ -443,6 +451,11 @@ class EndpointResolverBuiltins(str, Enum):
     # Whether to use the ARN region or raise an error when ARN and client
     # region differ (for s3 service only, bool)
     AWS_S3_USE_ARN_REGION = "AWS::S3::UseArnRegion"
+    # Whether to use S3 Express session authentication, or fallback to default
+    # authentication (for s3 service only, bool).
+    AWS_S3_DISABLE_EXPRESS_SESSION_AUTH = (
+        "AWS::S3::DisableS3ExpressSessionAuth"
+    )
     # Whether to use the ARN region or raise an error when ARN and client
     # region differ (for s3-control service only, bool)
     AWS_S3CONTROL_USE_ARN_REGION = 'AWS::S3Control::UseArnRegion'
@@ -450,6 +463,10 @@ class EndpointResolverBuiltins(str, Enum):
     AWS_S3_DISABLE_MRAP = "AWS::S3::DisableMultiRegionAccessPoints"
     # Whether a custom endpoint has been configured (str)
     SDK_ENDPOINT = "SDK::Endpoint"
+    # An AWS account ID that can be optionally configured for the SDK client (str)
+    ACCOUNT_ID = "AWS::Auth::AccountId"
+    # Whether an endpoint should include an account ID (str)
+    ACCOUNT_ID_ENDPOINT_MODE = "AWS::Auth::AccountIdEndpointMode"
 
 
 class EndpointRulesetResolver:
@@ -465,10 +482,16 @@ class EndpointRulesetResolver:
         event_emitter,
         use_ssl=True,
         requested_auth_scheme=None,
+        auth_scheme_preference=None,
     ):
         self._provider = EndpointProvider(
             ruleset_data=endpoint_ruleset_data,
             partition_data=partition_data,
+            excluded_params=(
+                S3_UNREFERENCED_PARAMS
+                if service_model.service_name == 's3'
+                else None
+            ),
         )
         self._param_definitions = self._provider.ruleset.parameters
         self._service_model = service_model
@@ -477,6 +500,7 @@ class EndpointRulesetResolver:
         self._event_emitter = event_emitter
         self._use_ssl = use_ssl
         self._requested_auth_scheme = requested_auth_scheme
+        self._auth_scheme_preference = auth_scheme_preference
         self._instance_cache = {}
 
     def construct_endpoint(
@@ -496,7 +520,7 @@ class EndpointRulesetResolver:
             operation_model, call_args, request_context
         )
         LOG.debug(
-            'Calling endpoint provider with parameters: %s' % provider_params
+            'Calling endpoint provider with parameters: %s', provider_params
         )
         try:
             provider_result = self._provider.resolve_endpoint(
@@ -510,10 +534,14 @@ class EndpointRulesetResolver:
                 raise
             else:
                 raise botocore_exception from ex
-        LOG.debug('Endpoint provider result: %s' % provider_result.url)
+        LOG.debug('Endpoint provider result: %s', provider_result.url)
 
         # The endpoint provider does not support non-secure transport.
-        if not self._use_ssl and provider_result.url.startswith('https://'):
+        if (
+            not self._use_ssl
+            and provider_result.url.startswith('https://')
+            and 'Endpoint' not in provider_params
+        ):
             provider_result = provider_result._replace(
                 url=f'http://{provider_result.url[8:]}'
             )
@@ -559,6 +587,7 @@ class EndpointRulesetResolver:
                 )
             if param_val is not None:
                 provider_params[param_name] = param_val
+                self._register_endpoint_feature_ids(param_name, param_val)
 
         return provider_params
 
@@ -575,6 +604,13 @@ class EndpointRulesetResolver:
         )
         if dynamic is not None:
             return dynamic
+        operation_context_params = (
+            self._resolve_param_as_operation_context_param(
+                param_name, operation_model, call_args
+            )
+        )
+        if operation_context_params is not None:
+            return operation_context_params
         return self._resolve_param_as_client_context_param(param_name)
 
     def _resolve_param_as_static_context_param(
@@ -597,10 +633,21 @@ class EndpointRulesetResolver:
             client_ctx_varname = client_ctx_params[param_name]
             return self._client_context.get(client_ctx_varname)
 
+    def _resolve_param_as_operation_context_param(
+        self, param_name, operation_model, call_args
+    ):
+        operation_ctx_params = operation_model.operation_context_parameters
+        if param_name in operation_ctx_params:
+            path = operation_ctx_params[param_name]['path']
+            return jmespath.search(path, call_args)
+
     def _resolve_param_as_builtin(self, builtin_name, builtins):
         if builtin_name not in EndpointResolverBuiltins.__members__.values():
             raise UnknownEndpointResolutionBuiltInName(name=builtin_name)
-        return builtins.get(builtin_name)
+        builtin = builtins.get(builtin_name)
+        if callable(builtin):
+            return builtin()
+        return builtin
 
     @instance_cache
     def _get_static_context_params(self, operation_model):
@@ -633,7 +680,7 @@ class EndpointRulesetResolver:
         customized_builtins = copy.copy(self._builtins)
         # Handlers are expected to modify the builtins dict in place.
         self._event_emitter.emit(
-            'before-endpoint-resolution.%s' % service_id,
+            f'before-endpoint-resolution.{service_id}',
             builtins=customized_builtins,
             model=operation_model,
             params=call_args,
@@ -667,6 +714,9 @@ class EndpointRulesetResolver:
         if self._requested_auth_scheme == UNSIGNED:
             return 'none', {}
 
+        available_ruleset_names = [
+            s['name'].split('#')[-1] for s in auth_schemes
+        ]
         auth_schemes = [
             {**scheme, 'name': self._strip_sig_prefix(scheme['name'])}
             for scheme in auth_schemes
@@ -688,6 +738,16 @@ class EndpointRulesetResolver:
                 # exception, instead default to the logic in botocore
                 # customizations.
                 return None, {}
+        elif self._auth_scheme_preference is not None:
+            prefs = self._auth_scheme_preference.split(',')
+            auth_schemes_by_auth_type = {
+                self._strip_sig_prefix(s['name'].split('#')[-1]): s
+                for s in auth_schemes
+            }
+            name = resolve_auth_scheme_preference(
+                prefs, available_ruleset_names
+            )
+            scheme = auth_schemes_by_auth_type[name]
         else:
             try:
                 name, scheme = next(
@@ -722,7 +782,9 @@ class EndpointRulesetResolver:
             signing_context['region'] = scheme['signingRegion']
         elif 'signingRegionSet' in scheme:
             if len(scheme['signingRegionSet']) > 0:
-                signing_context['region'] = scheme['signingRegionSet'][0]
+                signing_context['region'] = ','.join(
+                    scheme['signingRegionSet']
+                )
         if 'signingName' in scheme:
             signing_context.update(signing_name=scheme['signingName'])
         if 'disableDoubleEncoding' in scheme:
@@ -828,3 +890,9 @@ class EndpointRulesetResolver:
             if msg == 'EndpointId must be a valid host label.':
                 return InvalidEndpointConfigurationError(msg=msg)
         return None
+
+    def _register_endpoint_feature_ids(self, param_name, param_val):
+        if param_name == 'AccountIdEndpointMode':
+            register_feature_id(f'ACCOUNT_ID_MODE_{param_val.upper()}')
+        elif param_name == 'AccountId':
+            register_feature_id('RESOLVED_ACCOUNT_ID')

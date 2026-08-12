@@ -73,7 +73,7 @@ Additional parameters can be provided to the ``download_file`` method:
 
 * ``extra_args``: A dictionary containing any additional client arguments
   to include in the
-  `GetObject <https://botocore.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.get_object>`_
+  `GetObject <https://docs.aws.amazon.com/botocore/latest/reference/services/s3/client/get_object.html>`_
   API request. For example:
 
   .. code:: python
@@ -192,6 +192,7 @@ This snippet ensures that all clients created by the ``ProcessPoolDownloader``
 are using ``us-west-2`` as their region.
 
 """
+
 import collections
 import contextlib
 import logging
@@ -213,6 +214,7 @@ from s3transfer.utils import (
     OSUtils,
     calculate_num_parts,
     calculate_range_parameter,
+    create_nested_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -576,9 +578,8 @@ class ClientFactory:
 
     def create_client(self):
         """Create a botocore S3 client"""
-        return botocore.session.Session().create_client(
-            's3', **self._client_kwargs
-        )
+        session = botocore.session.Session()
+        return create_nested_client(session, 's3', **self._client_kwargs)
 
 
 class TransferMonitor:

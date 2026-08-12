@@ -101,6 +101,7 @@ information that doesn't quite fit in the original models, but is still needed
 for the sdk. For instance, additional operation parameters might be added here
 which don't represent the actual service api.
 """
+
 import logging
 import os
 
@@ -407,7 +408,7 @@ class Loader:
         if service_name not in known_services:
             raise UnknownServiceError(
                 service_name=service_name,
-                known_service_names=', '.join(sorted(known_services)),
+                known_service_names=', '.join(known_services),
             )
         if api_version is None:
             api_version = self.determine_latest_version(

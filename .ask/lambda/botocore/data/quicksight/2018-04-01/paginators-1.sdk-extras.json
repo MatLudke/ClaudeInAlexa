@@ -74,6 +74,12 @@
           "RequestId"
         ]
       },
+      "ListOAuthClientApplications": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
       "ListIngestions": {
         "non_aggregate_keys": [
           "Status",
@@ -184,6 +190,78 @@
           "RequestId",
           "Arn",
           "FolderId"
+        ]
+      },
+      "ListRoleMemberships": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "ListFoldersForResource": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "ListCustomPermissions": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "SearchTopics": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "ListActionConnectors": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "ListFlows": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "SearchActionConnectors": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "SearchFlows": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "ListKnowledgeBases": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "SearchKnowledgeBases": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "ListTopicsV2": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
+        ]
+      },
+      "SearchTopicsV2": {
+        "non_aggregate_keys": [
+          "Status",
+          "RequestId"
         ]
       }
     }

@@ -15,7 +15,7 @@ import logging
 import os
 import threading
 from datetime import datetime, timedelta
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import dateutil.parser
 from dateutil.tz import tzutc
@@ -27,8 +27,15 @@ from botocore.exceptions import (
     ClientError,
     InvalidConfigError,
     TokenRetrievalError,
+    UnknownTokenProviderError,
 )
-from botocore.utils import CachedProperty, JSONFileCache, SSOTokenLoader
+from botocore.utils import (
+    CachedProperty,
+    JSONFileCache,
+    SSOTokenLoader,
+    create_nested_client,
+    get_token_from_environment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +46,7 @@ def _utc_now():
 
 def create_token_resolver(session):
     providers = [
+        ScopedEnvTokenProvider(session),
         SSOTokenProvider(session),
     ]
     return TokenProviderChain(providers=providers)
@@ -56,7 +64,7 @@ def _sso_json_dumps(obj):
 
 class FrozenAuthToken(NamedTuple):
     token: str
-    expiration: Optional[datetime] = None
+    expiration: datetime | None = None
 
 
 class DeferredRefreshableToken:
@@ -162,9 +170,73 @@ class TokenProviderChain:
             providers = []
         self._providers = providers
 
-    def load_token(self):
+    def insert_before(self, name, token_provider):
+        """Insert a token provider before an existing provider in the chain.
+
+        :param name: The name of the token provider to insert before
+            (e.g. ``env`` or ``sso``). Existing names can be discovered
+            by accessing provider ``METHOD`` attributes.
+        :type name: str
+
+        :param token_provider: The token provider instance to insert.
+
+        :raises UnknownTokenProviderError: If no provider named
+            ``name`` exists in the chain.
+        """
+        offset = self._get_provider_offset(name)
+        self._providers.insert(offset, token_provider)
+
+    def insert_after(self, name, token_provider):
+        """Insert a token provider after an existing provider in the chain.
+
+        :param name: The name of the token provider to insert after
+            (e.g. ``env`` or ``sso``). Existing names can be discovered
+            by accessing provider ``METHOD`` attributes.
+        :type name: str
+
+        :param token_provider: The token provider instance to insert.
+
+        :raises UnknownTokenProviderError: If no provider named
+            ``name`` exists in the chain.
+        """
+        offset = self._get_provider_offset(name)
+        self._providers.insert(offset + 1, token_provider)
+
+    def remove(self, name):
+        """Remove a token provider from the chain by name.
+
+        If no provider with the given name exists, this is a no-op.
+
+        :param name: The name of the token provider to remove.
+        :type name: str
+        """
+        available_methods = [p.METHOD for p in self._providers]
+        if name not in available_methods:
+            return
+
+        offset = available_methods.index(name)
+        self._providers.pop(offset)
+
+    def get_provider(self, name):
+        """Return a token provider by name.
+
+        :param name: The name of the provider to retrieve.
+        :type name: str
+
+        :raises UnknownTokenProviderError: If no provider named
+            ``name`` exists in the chain.
+        """
+        return self._providers[self._get_provider_offset(name)]
+
+    def _get_provider_offset(self, name):
+        try:
+            return [p.METHOD for p in self._providers].index(name)
+        except ValueError:
+            raise UnknownTokenProviderError(name=name)
+
+    def load_token(self, **kwargs):
         for provider in self._providers:
-            token = provider.load_token()
+            token = provider.load_token(**kwargs)
             if token is not None:
                 return token
         return None
@@ -250,7 +322,7 @@ class SSOTokenProvider:
             region_name=self._sso_config["sso_region"],
             signature_version=UNSIGNED,
         )
-        return self._session.create_client("sso-oidc", config=config)
+        return create_nested_client(self._session, "sso-oidc", config=config)
 
     def _attempt_create_token(self, token):
         response = self._client.create_token(
@@ -290,7 +362,7 @@ class SSOTokenProvider:
 
         expiry = dateutil.parser.parse(token["registrationExpiresAt"])
         if total_seconds(expiry - self._now()) <= 0:
-            logger.info(f"SSO token registration expired at {expiry}")
+            logger.info("SSO token registration expired at %s", expiry)
             return None
 
         try:
@@ -302,10 +374,10 @@ class SSOTokenProvider:
     def _refresher(self):
         start_url = self._sso_config["sso_start_url"]
         session_name = self._sso_config["session_name"]
-        logger.info(f"Loading cached SSO token for {session_name}")
+        logger.info("Loading cached SSO token for %s", session_name)
         token_dict = self._token_loader(start_url, session_name=session_name)
         expiration = dateutil.parser.parse(token_dict["expiresAt"])
-        logger.debug(f"Cached SSO token expires at {expiration}")
+        logger.debug("Cached SSO token expires at %s", expiration)
 
         remaining = total_seconds(expiration - self._now())
         if remaining < self._REFRESH_WINDOW:
@@ -321,10 +393,36 @@ class SSOTokenProvider:
             token_dict["accessToken"], expiration=expiration
         )
 
-    def load_token(self):
+    def load_token(self, **kwargs):
         if self._sso_config is None:
             return None
 
         return DeferredRefreshableToken(
             self.METHOD, self._refresher, time_fetcher=self._now
         )
+
+
+class ScopedEnvTokenProvider:
+    """
+    Token provider that loads tokens from environment variables scoped to
+    a specific `signing_name`.
+    """
+
+    METHOD = 'env'
+
+    def __init__(self, session, environ=None):
+        self._session = session
+        if environ is None:
+            environ = os.environ
+        self.environ = environ
+
+    def load_token(self, **kwargs):
+        signing_name = kwargs.get("signing_name")
+        if signing_name is None:
+            return None
+
+        token = get_token_from_environment(signing_name, self.environ)
+
+        if token is not None:
+            logger.info("Found token in environment variables.")
+            return FrozenAuthToken(token)

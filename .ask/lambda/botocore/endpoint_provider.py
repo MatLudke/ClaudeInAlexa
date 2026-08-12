@@ -20,7 +20,6 @@ go to any `endpoint-rule-set.json` file in /botocore/data/<service>/<api version
 or you can look at the test files in /tests/unit/data/endpoints/valid-rules/
 """
 
-
 import logging
 import re
 from enum import Enum
@@ -43,11 +42,15 @@ from botocore.utils import (
 logger = logging.getLogger(__name__)
 
 TEMPLATE_STRING_RE = re.compile(r"\{[a-zA-Z#]+\}")
-GET_ATTR_RE = re.compile(r"(\w+)\[(\d+)\]")
+GET_ATTR_RE = re.compile(r"(\w*)\[(\d+)\]")
 VALID_HOST_LABEL_RE = re.compile(
     r"^(?!-)[a-zA-Z\d-]{1,63}(?<!-)$",
 )
 CACHE_SIZE = 100
+# S3 endpoint ruleset parameters that are defined but not currently referenced.
+# They are excluded from the cache key to avoid cache thrashing when
+# accessing multiple objects in the same bucket.
+S3_UNREFERENCED_PARAMS = {'Key', 'Prefix', 'CopySource'}
 ARN_PARSER = ArnParser()
 STRING_FORMATTER = Formatter()
 
@@ -170,7 +173,7 @@ class RuleSetStandardLibrary:
         names indicates the one to the right is nested. The index will always occur at
         the end of the path.
 
-        :type value: dict or list
+        :type value: dict or tuple
         :type path: str
         :rtype: Any
         """
@@ -179,7 +182,8 @@ class RuleSetStandardLibrary:
             if match is not None:
                 name, index = match.groups()
                 index = int(index)
-                value = value.get(name)
+                if name:
+                    value = value.get(name)
                 if value is None or index >= len(value):
                     return None
                 return value[index]
@@ -577,6 +581,7 @@ class ParameterType(Enum):
 
     string = str
     boolean = bool
+    stringarray = tuple
 
 
 class ParameterDefinition:
@@ -600,7 +605,7 @@ class ParameterDefinition:
         except AttributeError:
             raise EndpointResolutionError(
                 msg=f"Unknown parameter type: {parameter_type}. "
-                "A parameter must be of type string or boolean."
+                "A parameter must be of type string, boolean, or stringarray."
             )
         self.documentation = documentation
         self.builtin = builtIn
@@ -639,7 +644,7 @@ class ParameterDefinition:
                 return self.default
             if self.required:
                 raise EndpointResolutionError(
-                    f"Cannot find value for required parameter {self.name}"
+                    msg=f"Cannot find value for required parameter {self.name}"
                 )
             # in all other cases, the parameter will keep the value None
         else:
@@ -700,11 +705,17 @@ class RuleSet:
 class EndpointProvider:
     """Derives endpoints from a RuleSet for given input parameters."""
 
-    def __init__(self, ruleset_data, partition_data):
+    def __init__(self, ruleset_data, partition_data, excluded_params=None):
         self.ruleset = RuleSet(**ruleset_data, partitions=partition_data)
+        self._excluded_params = excluded_params or frozenset()
+
+    def resolve_endpoint(self, **input_parameters):
+        for param in self._excluded_params:
+            input_parameters.pop(param, None)
+        return self._resolve_endpoint(**input_parameters)
 
     @lru_cache_weakref(maxsize=CACHE_SIZE)
-    def resolve_endpoint(self, **input_parameters):
+    def _resolve_endpoint(self, **input_parameters):
         """Match input parameters to a rule.
 
         :type input_parameters: dict

@@ -179,6 +179,90 @@
       "output_token": "NextToken",
       "limit_key": "MaxResults",
       "result_key": "FolderSummaryList"
+    },
+    "ListRoleMemberships": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "MembersList"
+    },
+    "ListFoldersForResource": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "Folders"
+    },
+    "ListBrands": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "Brands"
+    },
+    "ListCustomPermissions": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "CustomPermissionsList"
+    },
+    "SearchTopics": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "TopicSummaryList"
+    },
+    "ListActionConnectors": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "ActionConnectorSummaries"
+    },
+    "ListFlows": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "FlowSummaryList"
+    },
+    "SearchActionConnectors": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "ActionConnectorSummaries"
+    },
+    "SearchFlows": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "FlowSummaryList"
+    },
+    "ListOAuthClientApplications": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "OAuthClientApplications"
+    },
+    "ListKnowledgeBases": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "KnowledgeBaseSummaries"
+    },
+    "SearchKnowledgeBases": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "KnowledgeBaseSummaries"
+    },
+    "ListTopicsV2": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "TopicSummaryList"
+    },
+    "SearchTopicsV2": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "TopicSummaryList"
     }
   }
 }

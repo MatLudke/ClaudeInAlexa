@@ -5,6 +5,7 @@ import socket
 import sys
 import warnings
 from base64 import b64encode
+from concurrent.futures import CancelledError
 
 from urllib3 import PoolManager, Timeout, proxy_from_url
 from urllib3.exceptions import (
@@ -18,6 +19,7 @@ from urllib3.exceptions import (
 )
 from urllib3.exceptions import ReadTimeoutError as URLLib3ReadTimeoutError
 from urllib3.exceptions import SSLError as URLLib3SSLError
+from urllib3.poolmanager import PoolKey
 from urllib3.util.retry import Retry
 from urllib3.util.ssl_ import (
     OP_NO_COMPRESSION,
@@ -45,7 +47,7 @@ try:
         from urllib3.contrib.pyopenssl import (
             orig_util_SSLContext as SSLContext,
         )
-except ImportError:
+except (AttributeError, ImportError):
     from urllib3.util.ssl_ import SSLContext
 
 try:
@@ -80,6 +82,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 60
 MAX_POOL_CONNECTIONS = 10
 DEFAULT_CA_BUNDLE = os.path.join(os.path.dirname(__file__), 'cacert.pem')
+BUFFER_SIZE = None
+if hasattr(PoolKey, 'key_blocksize'):
+    # urllib3 2.0 implemented its own chunking logic and set
+    # a default blocksize of 16KB. This creates a noticeable
+    # performance bottleneck when transferring objects
+    # larger than 100MB. Based on experiments, a blocksize
+    # of 128KB significantly improves throughput before
+    # getting diminishing returns.
+    BUFFER_SIZE = 1024 * 128
 
 try:
     from certifi import where
@@ -94,7 +105,7 @@ def get_cert_path(verify):
         return verify
 
     cert_path = where()
-    logger.debug(f"Certificate path: {cert_path}")
+    logger.debug("Certificate path: %s", cert_path)
 
     return cert_path
 
@@ -342,6 +353,8 @@ class URLLib3Session:
             'cert_file': self._cert_file,
             'key_file': self._key_file,
         }
+        if BUFFER_SIZE:
+            pool_manager_kwargs['blocksize'] = BUFFER_SIZE
         pool_manager_kwargs.update(**extra_kwargs)
         return pool_manager_kwargs
 
@@ -439,6 +452,31 @@ class URLLib3Session:
         transfer_encoding = ensure_bytes(transfer_encoding)
         return transfer_encoding.lower() == b'chunked'
 
+    def _get_request_timeout(self, request):
+        """Resolve a per-request timeout override from the request context.
+
+        Returns a ``urllib3.Timeout`` when the request context contains a
+        ``read_timeout`` override, otherwise ``None`` to defer to the
+        connection pool's default timeout which is configured through client
+        config.
+
+        """
+        # We could use `request.context` directly, but we're being
+        # intentionally cautious here.  `context` is the first addition to
+        # AWSPreparedRequest in many years, and it's possible we might
+        # see an AWSPreparedRequest that doesn't have the `context` attribute.
+        context = getattr(request, 'context', None)
+        if context is None:
+            return None
+        read_timeout = context.get('read_timeout')
+        if read_timeout is None:
+            return None
+        if isinstance(self._timeout, Timeout):
+            connect_timeout = self._timeout.connect_timeout
+        else:
+            connect_timeout = self._timeout
+        return Timeout(connect=connect_timeout, read=read_timeout)
+
     def close(self):
         self._manager.clear()
         for manager in self._proxy_managers.values():
@@ -461,6 +499,13 @@ class URLLib3Session:
                 conn.proxy_headers['host'] = host
 
             request_target = self._get_request_target(request.url, proxy_url)
+            extra_kwargs = {}
+            request_timeout = self._get_request_timeout(request)
+            if request_timeout is not None:
+                # Only include the timeout kwarg when overridden; passing
+                # timeout=None to urlopen would disable timeouts entirely
+                # rather than defer to the pool's default timeout.
+                extra_kwargs['timeout'] = request_timeout
             urllib_response = conn.urlopen(
                 method=request.method,
                 url=request_target,
@@ -471,6 +516,7 @@ class URLLib3Session:
                 preload_content=False,
                 decode_content=False,
                 chunked=self._chunked(request.headers),
+                **extra_kwargs,
             )
 
             http_response = botocore.awsrequest.AWSResponse(
@@ -503,6 +549,8 @@ class URLLib3Session:
             raise ConnectionClosedError(
                 error=e, request=request, endpoint_url=request.url
             )
+        except CancelledError:
+            raise
         except Exception as e:
             message = 'Exception received when sending urllib3 HTTP request'
             logger.debug(message, exc_info=True)
