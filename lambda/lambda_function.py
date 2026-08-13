@@ -219,39 +219,95 @@ def generate_followup_questions(conversation_context, query, response_text, coun
 import urllib.parse
 import xml.etree.ElementTree as ET
 import html
+from concurrent.futures import ThreadPoolExecutor
 
-def fetch_live_search(query, max_results=3):
-    """Fetches real-time web search context using Bing News RSS and Wikipedia API."""
-    results = []
+def extract_main_article_text(html_content, max_chars=1200):
+    """Strips HTML tags, script, and style tags to extract clean main article body text."""
+    clean = re.sub(r'<(script|style|head|footer|nav|header)[^>]*>.*?</\1>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+    clean = re.sub(r'<[^>]+>', ' ', clean)
+    clean = html.unescape(clean)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean[:max_chars]
+
+def scrape_single_website(target_url, timeout=3):
+    """Visits a website URL and extracts readable page text."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    try:
+        res = requests.get(target_url, headers=headers, timeout=timeout, allow_redirects=True)
+        if res.ok and len(res.text) > 400:
+            text = extract_main_article_text(res.text)
+            if len(text) > 100:
+                return {"url": res.url, "content": text}
+    except Exception as e:
+        logger.debug(f"Error scraping {target_url}: {e}")
+    return None
+
+def fetch_live_search(query, max_websites=3):
+    """
+    Claude App style web browsing:
+    1. Discovers top matching website URLs.
+    2. Concurrently visits and scrapes full page contents of those websites.
+    3. Feeds readable website body content into Claude's reasoning context.
+    """
+    target_urls = []
+    
+    # Step 1: Discover top URLs from Bing News RSS
     try:
         rss_url = f"https://www.bing.com/news/search?q={urllib.parse.quote(query)}&format=rss"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         res = requests.get(rss_url, headers=headers, timeout=3)
         if res.ok:
             root = ET.fromstring(res.text)
-            for item in root.findall(".//item")[:max_results]:
-                title = item.findtext("title", "")
-                desc = item.findtext("description", "")
-                clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
-                if title or clean_desc:
-                    results.append(f"{title}: {clean_desc}")
+            for item in root.findall(".//item"):
+                link = item.findtext("link", "")
+                parsed = urllib.parse.urlparse(link)
+                params = urllib.parse.parse_qs(parsed.query)
+                actual_url = params.get("url", [None])[0]
+                if actual_url and actual_url not in target_urls:
+                    target_urls.append(actual_url)
+                elif link and "bing.com" not in link and link not in target_urls:
+                    target_urls.append(link)
+                if len(target_urls) >= max_websites:
+                    break
     except Exception as e:
-        logger.warning(f"Bing search error: {e}")
-        
-    if len(results) < max_results:
+        logger.warning(f"RSS link discovery error: {e}")
+
+    # Step 2: Fallback discover Wikipedia URLs
+    if len(target_urls) < max_websites:
         try:
             wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&format=json&utf8=1"
             res = requests.get(wiki_url, timeout=3)
             if res.ok:
-                search_hits = res.json().get("query", {}).get("search", [])
-                for hit in search_hits[:max_results]:
-                    title = hit.get("title", "")
-                    snippet = html.unescape(hit.get("snippet", "")).replace('<span class="searchmatch">', '').replace('</span>', '')
-                    results.append(f"{title}: {snippet}")
+                hits = res.json().get("query", {}).get("search", [])
+                for hit in hits:
+                    page_title = hit.get("title", "").replace(" ", "_")
+                    wiki_link = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(page_title)}"
+                    if wiki_link not in target_urls:
+                        target_urls.append(wiki_link)
+                    if len(target_urls) >= max_websites:
+                        break
         except Exception as e:
-            logger.warning(f"Wiki search error: {e}")
+            logger.warning(f"Wiki link discovery error: {e}")
 
-    return "\n".join(results[:max_results])
+    logger.info(f"Visiting and reading websites: {target_urls}")
+
+    # Step 3: Concurrently visit websites & extract body content
+    scraped_pages = []
+    with ThreadPoolExecutor(max_workers=max_websites) as executor:
+        futures = [executor.submit(scrape_single_website, url) for url in target_urls]
+        for f in futures:
+            result = f.result()
+            if result:
+                scraped_pages.append(result)
+
+    # Step 4: Build formatted multi-website context block
+    formatted_context = ""
+    for idx, page in enumerate(scraped_pages, 1):
+        formatted_context += f"\n--- [Website #{idx} Visited: {page['url']}] ---\n{page['content']}\n"
+
+    return formatted_context
 
 import boto3
 
