@@ -21,10 +21,12 @@ if os.path.exists(env_file_path):
                 k, v = line.split("=", 1)
                 os.environ[k.strip()] = v.strip()
 
-poe_api_key = os.environ.get("POE_API_KEY", "")
-openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
-primary_model = os.environ.get("PRIMARY_MODEL", "claude-haiku-4.5")
-fallback_model = os.environ.get("FALLBACK_MODEL", "anthropic/claude-3-haiku")
+# Amazon Bedrock configuration
+bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-3-5-haiku-20241022-v1:0")
+aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID", os.environ.get("BEDROCK_ACCESS_KEY", ""))
+aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY", os.environ.get("BEDROCK_SECRET_KEY", ""))
+aws_region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+bedrock_api_key = os.environ.get("BEDROCK_API_KEY", os.environ.get("AWS_BEARER_TOKEN", ""))
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -224,7 +226,7 @@ aws_region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "
 bedrock_api_key = os.environ.get("BEDROCK_API_KEY", os.environ.get("AWS_BEARER_TOKEN", ""))
 
 def generate_ai_response(chat_history, new_question, is_followup=False):
-    """Generates an AI response using Amazon Bedrock (Claude Haiku 4.5/3.5), Poe API, or OpenRouter fallback."""
+    """Generates an AI response using Amazon Bedrock (Claude Haiku 4.5/3.5)."""
     system_message = (
         "You are an AI voice assistant responding out loud through an Alexa device. "
         "Follow these strict rules for your response format:\n"
@@ -235,31 +237,52 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
     if is_followup:
         system_message += " This is a follow-up question. Answer directly and concisely, building naturally on the context."
     
-    # Attempt 1: Amazon Bedrock
+    history_limit = 10 if not is_followup else 5
+    bedrock_messages = []
+    for question, answer in chat_history[-history_limit:]:
+        bedrock_messages.append({"role": "user", "content": question})
+        bedrock_messages.append({"role": "assistant", "content": answer})
+    bedrock_messages.append({"role": "user", "content": new_question})
+    
+    payload = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 500,
+        "temperature": 0.7,
+        "system": system_message,
+        "messages": bedrock_messages
+    }
+
+    # Method 1: Bedrock via Bearer Token (HTTP) if provided
+    if bedrock_api_key:
+        try:
+            logger.info("Attempting Amazon Bedrock via Bearer token...")
+            url = f"https://bedrock-runtime.{aws_region}.amazonaws.com/model/{bedrock_model_id}/invoke"
+            headers = {
+                "Authorization": f"Bearer {bedrock_api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+            res = requests.post(url, headers=headers, json=payload, timeout=15)
+            if res.ok:
+                res_data = res.json()
+                if "content" in res_data and len(res_data["content"]) > 0:
+                    raw_text = res_data["content"][0].get("text", "")
+                    if raw_text:
+                        return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
+            else:
+                logger.warning(f"Bedrock Bearer HTTP request returned status {res.status_code}: {res.text[:200]}")
+        except Exception as e:
+            logger.warning(f"Bedrock Bearer HTTP request error: {e}")
+
+    # Method 2: Bedrock via boto3 SDK (IAM Role / Access Keys)
     try:
-        logger.info(f"Attempting Amazon Bedrock with model {bedrock_model_id} in region {aws_region}...")
+        logger.info(f"Attempting Amazon Bedrock via boto3 SDK with model {bedrock_model_id} in region {aws_region}...")
         client_kwargs = {"region_name": aws_region}
         if aws_access_key_id and aws_secret_access_key:
             client_kwargs["aws_access_key_id"] = aws_access_key_id
             client_kwargs["aws_secret_access_key"] = aws_secret_access_key
         
         bedrock_runtime = boto3.client("bedrock-runtime", **client_kwargs)
-        
-        history_limit = 10 if not is_followup else 5
-        bedrock_messages = []
-        for question, answer in chat_history[-history_limit:]:
-            bedrock_messages.append({"role": "user", "content": question})
-            bedrock_messages.append({"role": "assistant", "content": answer})
-        bedrock_messages.append({"role": "user", "content": new_question})
-        
-        payload = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 500,
-            "temperature": 0.7,
-            "system": system_message,
-            "messages": bedrock_messages
-        }
-        
         response = bedrock_runtime.invoke_model(
             modelId=bedrock_model_id,
             contentType="application/json",
@@ -272,71 +295,9 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
             if raw_text:
                 return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
     except Exception as e:
-        logger.warning(f"Amazon Bedrock call failed/skipped: {e}")
+        logger.error(f"Amazon Bedrock boto3 call failed: {e}")
 
-    messages = [{"role": "system", "content": system_message}]
-    history_limit = 10 if not is_followup else 5
-    for question, answer in chat_history[-history_limit:]:
-        messages.append({"role": "user", "content": question})
-        messages.append({"role": "assistant", "content": answer})
-    messages.append({"role": "user", "content": new_question})
-
-    # Attempt 2: Poe API Fallback
-    if poe_api_key:
-        poe_url = "https://api.poe.com/v1/chat/completions"
-        poe_headers = {
-            "Authorization": f"Bearer {poe_api_key}",
-            "Content-Type": "application/json"
-        }
-        poe_payload = {
-            "model": primary_model,
-            "messages": messages,
-            "temperature": 0.7
-        }
-        try:
-            logger.info(f"Attempting Poe API with model {primary_model}...")
-            res = requests.post(poe_url, headers=poe_headers, json=poe_payload, timeout=15)
-            if res.ok:
-                res_data = res.json()
-                choices = res_data.get('choices', [])
-                if choices:
-                    raw_text = choices[0].get('message', {}).get('content', '')
-                    return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
-            else:
-                logger.warning(f"Poe API returned status {res.status_code}: {res.text[:200]}")
-        except Exception as e:
-            logger.error(f"Error calling Poe API: {e}")
-
-    # Attempt 3: OpenRouter Fallback
-    if openrouter_api_key:
-        or_url = "https://openrouter.ai/api/v1/chat/completions"
-        or_headers = {
-            "Authorization": f"Bearer {openrouter_api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/MatLudke/ClaudeInAlexa",
-            "X-Title": "Alexa AI Skill"
-        }
-        or_payload = {
-            "model": fallback_model,
-            "messages": messages,
-            "max_tokens": 2048,
-            "temperature": 0.7
-        }
-        try:
-            logger.info(f"Attempting OpenRouter API fallback with model {fallback_model}...")
-            res = requests.post(or_url, headers=or_headers, json=or_payload, timeout=15)
-            if res.ok:
-                res_data = res.json()
-                choices = res_data.get('choices', [])
-                if choices:
-                    raw_text = choices[0].get('message', {}).get('content', '')
-                    return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
-            else:
-                logger.warning(f"OpenRouter API returned status {res.status_code}: {res.text[:200]}")
-        except Exception as e:
-            logger.error(f"Error calling OpenRouter API: {e}")
-
-    return "I'm sorry, I'm having trouble connecting to Amazon Bedrock or the AI provider right now. Please verify your AWS credentials.", ["Try again"]
+    return "I'm sorry, I'm having trouble connecting to Amazon Bedrock right now. Please verify your Amazon Bedrock credentials.", ["Try again"]
 
 generate_claude_response = generate_ai_response
 generate_gemini_response = generate_ai_response
