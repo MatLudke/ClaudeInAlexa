@@ -239,10 +239,10 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
     
     history_limit = 10 if not is_followup else 5
     
-    # Models to try in order of preference
+    # Models to try in order of preference (Claude 3.5 / 4.5 Haiku)
     models_to_try = [
         bedrock_model_id,
-        "us.anthropic.claude-3-haiku-20240307-v1:0",
+        "anthropic.claude-3-5-haiku-20241022-v1:0",
         "us.amazon.nova-micro-v1:0",
         "us.amazon.nova-lite-v1:0"
     ]
