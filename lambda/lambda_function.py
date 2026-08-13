@@ -216,34 +216,80 @@ def generate_followup_questions(conversation_context, query, response_text, coun
     """Returns concise follow-up question suggestions without extra API calls to save quota."""
     return ["Tell me more", "Explain in detail"]
 
+import urllib.parse
+import xml.etree.ElementTree as ET
+import html
+
+def fetch_live_search(query, max_results=3):
+    """Fetches real-time web search context using Bing News RSS and Wikipedia API."""
+    results = []
+    try:
+        rss_url = f"https://www.bing.com/news/search?q={urllib.parse.quote(query)}&format=rss"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        res = requests.get(rss_url, headers=headers, timeout=3)
+        if res.ok:
+            root = ET.fromstring(res.text)
+            for item in root.findall(".//item")[:max_results]:
+                title = item.findtext("title", "")
+                desc = item.findtext("description", "")
+                clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
+                if title or clean_desc:
+                    results.append(f"{title}: {clean_desc}")
+    except Exception as e:
+        logger.warning(f"Bing search error: {e}")
+        
+    if len(results) < max_results:
+        try:
+            wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&format=json&utf8=1"
+            res = requests.get(wiki_url, timeout=3)
+            if res.ok:
+                search_hits = res.json().get("query", {}).get("search", [])
+                for hit in search_hits[:max_results]:
+                    title = hit.get("title", "")
+                    snippet = html.unescape(hit.get("snippet", "")).replace('<span class="searchmatch">', '').replace('</span>', '')
+                    results.append(f"{title}: {snippet}")
+        except Exception as e:
+            logger.warning(f"Wiki search error: {e}")
+
+    return "\n".join(results[:max_results])
+
 import boto3
 
 # Amazon Bedrock configuration
-bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-3-5-haiku-20241022-v1:0")
+bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
 aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID", os.environ.get("BEDROCK_ACCESS_KEY", ""))
 aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY", os.environ.get("BEDROCK_SECRET_KEY", ""))
 aws_region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
 bedrock_api_key = os.environ.get("BEDROCK_API_KEY", os.environ.get("AWS_BEARER_TOKEN", ""))
 
 def generate_ai_response(chat_history, new_question, is_followup=False):
-    """Generates an AI response using Amazon Bedrock with Claude Haiku 4.5."""
+    """Generates an AI response using Claude Sonnet 5 / 3.7 with Medium Reasoning and Web Search on Bedrock."""
     system_message = (
         "You are an AI voice assistant responding out loud through an Alexa device. "
         "Follow these strict rules for your response format:\n"
         "1. Write exclusively for SPOKEN voice output (Text-To-Speech). Use natural, conversational, fluid prose that sounds great when spoken out loud.\n"
         "2. Do NOT use markdown syntax, headers (#), bullet points (-), numbered lists, bold (**), italics (*), or visual list formatting.\n"
-        "3. Keep answers clear, engaging, and concise (about 2 to 4 sentences, or a well-paced single short paragraph). Provide rich detail without being overly verbose or overwhelming for a listener."
+        "3. Keep answers clear, engaging, and concise (about 2 to 4 sentences, or a well-paced single short paragraph). Provide rich detail without being overly verbose or overwhelming for a listener.\n"
+        "4. Use the provided real-time web search context and internal reasoning to give accurate, up-to-date answers."
     )
     if is_followup:
         system_message += " This is a follow-up question. Answer directly and concisely, building naturally on the context."
     
+    # Perform live web search for context
+    search_context = fetch_live_search(new_question)
+    enhanced_question = new_question
+    if search_context:
+        logger.info("Enriched query with live web search results.")
+        enhanced_question += f"\n\n[Live Web Search Context]:\n{search_context}"
+    
     history_limit = 10 if not is_followup else 5
     
-    # Models to try in order of preference (Claude Haiku 4.5)
+    # Models to try in order of preference (Claude Sonnet 5 / 3.7 -> Nova Pro / Lite)
     models_to_try = [
         bedrock_model_id,
-        "anthropic.claude-3-5-haiku-20241022-v1:0",
-        "us.amazon.nova-micro-v1:0",
+        "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "us.amazon.nova-pro-v1:0",
         "us.amazon.nova-lite-v1:0"
     ]
     
@@ -257,10 +303,10 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                 for question, answer in chat_history[-history_limit:]:
                     nova_messages.append({"role": "user", "content": [{"text": question}]})
                     nova_messages.append({"role": "assistant", "content": [{"text": answer}]})
-                nova_messages.append({"role": "user", "content": [{"text": new_question}]})
+                nova_messages.append({"role": "user", "content": [{"text": enhanced_question}]})
                 
                 payload = {
-                    "inferenceConfig": {"max_new_tokens": 500, "temperature": 0.7},
+                    "inferenceConfig": {"max_new_tokens": 1024, "temperature": 0.7},
                     "system": [{"text": system_message}],
                     "messages": nova_messages
                 }
@@ -269,12 +315,17 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                 for question, answer in chat_history[-history_limit:]:
                     claude_messages.append({"role": "user", "content": question})
                     claude_messages.append({"role": "assistant", "content": answer})
-                claude_messages.append({"role": "user", "content": new_question})
+                claude_messages.append({"role": "user", "content": enhanced_question})
                 
+                # Payload with Extended Thinking / Reasoning at Medium (budget: 1024 tokens)
                 payload = {
                     "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 500,
-                    "temperature": 0.7,
+                    "max_tokens": 2048,
+                    "temperature": 1.0,
+                    "thinking": {
+                        "type": "enabled",
+                        "budget_tokens": 1024
+                    },
                     "system": system_message,
                     "messages": claude_messages
                 }
@@ -287,13 +338,17 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                     "Content-Type": "application/json",
                     "Accept": "application/json"
                 }
-                res = requests.post(url, headers=headers, json=payload, timeout=12)
+                res = requests.post(url, headers=headers, json=payload, timeout=15)
                 if res.ok:
                     res_data = res.json()
                     if "nova" in model_id:
                         raw_text = res_data.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
                     else:
-                        raw_text = res_data.get("content", [{}])[0].get("text", "")
+                        # Extract SPOKEN text block only, excluding thinking reasoning block
+                        raw_text = ""
+                        for block in res_data.get("content", []):
+                            if block.get("type") == "text":
+                                raw_text += block.get("text", "")
                     if raw_text:
                         logger.info(f"Successfully generated response with Bedrock model '{model_id}'")
                         return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
@@ -317,7 +372,10 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
             if "nova" in model_id:
                 raw_text = response_body.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
             else:
-                raw_text = response_body.get("content", [{}])[0].get("text", "")
+                raw_text = ""
+                for block in response_body.get("content", []):
+                    if block.get("type") == "text":
+                        raw_text += block.get("text", "")
             if raw_text:
                 logger.info(f"Successfully generated response with boto3 Bedrock model '{model_id}'")
                 return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
