@@ -226,7 +226,7 @@ aws_region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "
 bedrock_api_key = os.environ.get("BEDROCK_API_KEY", os.environ.get("AWS_BEARER_TOKEN", ""))
 
 def generate_ai_response(chat_history, new_question, is_followup=False):
-    """Generates an AI response using Amazon Bedrock (Claude Haiku 3.5 / Amazon Nova)."""
+    """Generates an AI response using Amazon Bedrock with Claude Haiku 4.5."""
     system_message = (
         "You are an AI voice assistant responding out loud through an Alexa device. "
         "Follow these strict rules for your response format:\n"
@@ -239,7 +239,7 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
     
     history_limit = 10 if not is_followup else 5
     
-    # Models to try in order of preference (Claude 3.5 / 4.5 Haiku)
+    # Models to try in order of preference (Claude Haiku 4.5)
     models_to_try = [
         bedrock_model_id,
         "anthropic.claude-3-5-haiku-20241022-v1:0",
