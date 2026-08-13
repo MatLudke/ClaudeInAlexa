@@ -226,7 +226,7 @@ aws_region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "
 bedrock_api_key = os.environ.get("BEDROCK_API_KEY", os.environ.get("AWS_BEARER_TOKEN", ""))
 
 def generate_ai_response(chat_history, new_question, is_followup=False):
-    """Generates an AI response using Amazon Bedrock (Claude Haiku 4.5/3.5)."""
+    """Generates an AI response using Amazon Bedrock (Claude Haiku 3.5 / Amazon Nova)."""
     system_message = (
         "You are an AI voice assistant responding out loud through an Alexa device. "
         "Follow these strict rules for your response format:\n"
@@ -238,64 +238,91 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
         system_message += " This is a follow-up question. Answer directly and concisely, building naturally on the context."
     
     history_limit = 10 if not is_followup else 5
-    bedrock_messages = []
-    for question, answer in chat_history[-history_limit:]:
-        bedrock_messages.append({"role": "user", "content": question})
-        bedrock_messages.append({"role": "assistant", "content": answer})
-    bedrock_messages.append({"role": "user", "content": new_question})
     
-    payload = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 500,
-        "temperature": 0.7,
-        "system": system_message,
-        "messages": bedrock_messages
-    }
-
-    # Method 1: Bedrock via Bearer Token (HTTP) if provided
-    if bedrock_api_key:
+    # Models to try in order of preference
+    models_to_try = [
+        bedrock_model_id,
+        "us.anthropic.claude-3-haiku-20240307-v1:0",
+        "us.amazon.nova-micro-v1:0",
+        "us.amazon.nova-lite-v1:0"
+    ]
+    
+    for model_id in models_to_try:
         try:
-            logger.info("Attempting Amazon Bedrock via Bearer token...")
-            url = f"https://bedrock-runtime.{aws_region}.amazonaws.com/model/{bedrock_model_id}/invoke"
-            headers = {
-                "Authorization": f"Bearer {bedrock_api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            }
-            res = requests.post(url, headers=headers, json=payload, timeout=15)
-            if res.ok:
-                res_data = res.json()
-                if "content" in res_data and len(res_data["content"]) > 0:
-                    raw_text = res_data["content"][0].get("text", "")
-                    if raw_text:
-                        return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
+            logger.info(f"Attempting Amazon Bedrock model '{model_id}' in region '{aws_region}'...")
+            
+            # Format payload based on model family
+            if "nova" in model_id:
+                nova_messages = []
+                for question, answer in chat_history[-history_limit:]:
+                    nova_messages.append({"role": "user", "content": [{"text": question}]})
+                    nova_messages.append({"role": "assistant", "content": [{"text": answer}]})
+                nova_messages.append({"role": "user", "content": [{"text": new_question}]})
+                
+                payload = {
+                    "inferenceConfig": {"max_new_tokens": 500, "temperature": 0.7},
+                    "system": [{"text": system_message}],
+                    "messages": nova_messages
+                }
             else:
-                logger.warning(f"Bedrock Bearer HTTP request returned status {res.status_code}: {res.text[:200]}")
-        except Exception as e:
-            logger.warning(f"Bedrock Bearer HTTP request error: {e}")
+                claude_messages = []
+                for question, answer in chat_history[-history_limit:]:
+                    claude_messages.append({"role": "user", "content": question})
+                    claude_messages.append({"role": "assistant", "content": answer})
+                claude_messages.append({"role": "user", "content": new_question})
+                
+                payload = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 500,
+                    "temperature": 0.7,
+                    "system": system_message,
+                    "messages": claude_messages
+                }
 
-    # Method 2: Bedrock via boto3 SDK (IAM Role / Access Keys)
-    try:
-        logger.info(f"Attempting Amazon Bedrock via boto3 SDK with model {bedrock_model_id} in region {aws_region}...")
-        client_kwargs = {"region_name": aws_region}
-        if aws_access_key_id and aws_secret_access_key:
-            client_kwargs["aws_access_key_id"] = aws_access_key_id
-            client_kwargs["aws_secret_access_key"] = aws_secret_access_key
-        
-        bedrock_runtime = boto3.client("bedrock-runtime", **client_kwargs)
-        response = bedrock_runtime.invoke_model(
-            modelId=bedrock_model_id,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(payload)
-        )
-        response_body = json.loads(response["body"].read().decode("utf-8"))
-        if "content" in response_body and len(response_body["content"]) > 0:
-            raw_text = response_body["content"][0].get("text", "")
+            # Method 1: Bearer Token (HTTP) if provided
+            if bedrock_api_key:
+                url = f"https://bedrock-runtime.{aws_region}.amazonaws.com/model/{model_id}/invoke"
+                headers = {
+                    "Authorization": f"Bearer {bedrock_api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
+                res = requests.post(url, headers=headers, json=payload, timeout=12)
+                if res.ok:
+                    res_data = res.json()
+                    if "nova" in model_id:
+                        raw_text = res_data.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+                    else:
+                        raw_text = res_data.get("content", [{}])[0].get("text", "")
+                    if raw_text:
+                        logger.info(f"Successfully generated response with Bedrock model '{model_id}'")
+                        return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
+                else:
+                    logger.warning(f"Bedrock model '{model_id}' HTTP returned status {res.status_code}: {res.text[:150]}")
+
+            # Method 2: boto3 SDK
+            client_kwargs = {"region_name": aws_region}
+            if aws_access_key_id and aws_secret_access_key:
+                client_kwargs["aws_access_key_id"] = aws_access_key_id
+                client_kwargs["aws_secret_access_key"] = aws_secret_access_key
+            
+            bedrock_runtime = boto3.client("bedrock-runtime", **client_kwargs)
+            response = bedrock_runtime.invoke_model(
+                modelId=model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(payload)
+            )
+            response_body = json.loads(response["body"].read().decode("utf-8"))
+            if "nova" in model_id:
+                raw_text = response_body.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+            else:
+                raw_text = response_body.get("content", [{}])[0].get("text", "")
             if raw_text:
+                logger.info(f"Successfully generated response with boto3 Bedrock model '{model_id}'")
                 return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
-    except Exception as e:
-        logger.error(f"Amazon Bedrock boto3 call failed: {e}")
+        except Exception as e:
+            logger.warning(f"Amazon Bedrock call for model '{model_id}' failed: {e}")
 
     return "I'm sorry, I'm having trouble connecting to Amazon Bedrock right now. Please verify your Amazon Bedrock credentials.", ["Try again"]
 
