@@ -222,40 +222,78 @@ import xml.etree.ElementTree as ET
 import html
 from concurrent.futures import ThreadPoolExecutor
 
-def fetch_tavily_search(query, max_results=3):
-    """Fetches real-time, comprehensive web search results using Tavily Search API."""
+def fetch_tavily_search(query, max_pages=3):
+    """
+    Claude App style web browsing engine using Tavily Search & Extract:
+    1. Performs advanced AI search to discover top authoritative sources and direct synthesis.
+    2. Opens and deeply reads (extracts) full page contents from the top visited websites.
+    3. Bundles multi-page intelligence into a rich context ledger for Claude Sonnet.
+    """
     key = os.environ.get("TAVILY_API_KEY", tavily_api_key)
     if not key:
         return None
     try:
-        url = "https://api.tavily.com/search"
-        payload = {
+        # Phase 1: Search & URL discovery
+        search_url = "https://api.tavily.com/search"
+        search_payload = {
             "api_key": key,
             "query": query,
-            "search_depth": "basic",
+            "search_depth": "advanced",
             "include_answer": True,
-            "max_results": max_results
+            "max_results": max_pages
         }
-        res = requests.post(url, json=payload, timeout=4)
-        if res.ok:
-            data = res.json()
-            answer = data.get("answer")
-            results = data.get("results", [])
+        s_res = requests.post(search_url, json=search_payload, timeout=4.5)
+        if not s_res.ok:
+            logger.warning(f"Tavily search returned status {s_res.status_code}")
+            return None
+        
+        data = s_res.json()
+        direct_answer = data.get("answer")
+        results = data.get("results", [])
+        
+        if not results:
+            return None
+        
+        # Phase 2: Open and read top visited websites via Tavily Extract
+        target_urls = [r["url"] for r in results[:max_pages] if r.get("url")]
+        extracted_pages = {}
+        if target_urls:
+            try:
+                ext_url = "https://api.tavily.com/extract"
+                ext_res = requests.post(ext_url, json={"api_key": key, "urls": target_urls}, timeout=4.0)
+                if ext_res.ok:
+                    ext_data = ext_res.json()
+                    for item in ext_data.get("results", []):
+                        url = item.get("url")
+                        raw_body = item.get("raw_content", "")
+                        if raw_body and len(raw_body) > 100:
+                            clean = re.sub(r'\s+', ' ', raw_body).strip()
+                            extracted_pages[url] = clean[:2000]
+            except Exception as e:
+                logger.warning(f"Tavily extract error: {e}")
+        
+        # Phase 3: Build structured multi-page reading ledger
+        browsing_blocks = []
+        if direct_answer:
+            browsing_blocks.append(f"[Direct Web Synthesis]:\n{direct_answer}")
             
-            context_blocks = []
-            if answer:
-                context_blocks.append(f"Direct Search Answer: {answer}")
-            for idx, item in enumerate(results, 1):
-                title = item.get("title", "Untitled")
-                url_item = item.get("url", "")
-                snippet = item.get("content", "")
-                context_blocks.append(f"[Source #{idx}: {title} ({url_item})]\n{snippet}")
+        for idx, item in enumerate(results, 1):
+            title = item.get("title", "Untitled Source")
+            url = item.get("url", "")
+            snippet = item.get("content", "")
+            # Prioritize deep extracted content, fallback to search snippet
+            detailed_content = extracted_pages.get(url, snippet)
+            browsing_blocks.append(
+                f"=== [Page #{idx} Visited: \"{title}\"] ===\n"
+                f"Source: {url}\n"
+                f"Content:\n{detailed_content[:1800]}"
+            )
             
-            if context_blocks:
-                logger.info(f"Tavily search retrieved {len(results)} live results for query: {query}")
-                return "\n\n".join(context_blocks)
+        logger.info(f"Tavily deep browsing successfully read {len(results)} pages for query: '{query}'")
+        return "\n\n".join(browsing_blocks)
+        
     except Exception as e:
-        logger.warning(f"Tavily search error: {e}")
+        logger.warning(f"Tavily browsing error: {e}")
     return None
 
 def extract_main_article_text(html_content, max_chars=1200):
@@ -283,12 +321,12 @@ def scrape_single_website(target_url, timeout=3):
 
 def fetch_live_search(query, max_websites=3):
     """
-    Live Web Search Pipeline:
-    1. Primary: Tavily AI Search API for high-precision live web search results.
+    Live Web Browsing Pipeline:
+    1. Primary: Tavily AI Deep Browsing (Searches + Opens & Extracts multiple web pages).
     2. Fallback: Concurrently scraped Bing News RSS / Wikipedia body content.
     """
-    # 1. Primary Tavily Search
-    tavily_context = fetch_tavily_search(query, max_results=max_websites)
+    # 1. Primary Deep Web Browsing with Tavily
+    tavily_context = fetch_tavily_search(query, max_pages=max_websites)
     if tavily_context:
         return tavily_context
 
@@ -352,7 +390,7 @@ def fetch_live_search(query, max_websites=3):
 import boto3
 
 def generate_ai_response(chat_history, new_question, is_followup=False):
-    """Generates an AI response with real-time web search and Bedrock LLM reasoning."""
+    """Generates an AI response using Claude Sonnet with High Reasoning & Deep Web Browsing."""
     system_message = (
         "You are Claude, an exceptionally intelligent, articulate, and sharp AI voice companion speaking out loud through Alexa.\n"
         "Your objective is to provide authoritative, highly insightful, and captivating answers that feel remarkably smart without ever sounding robotic, generic, or formulaic.\n\n"
@@ -360,31 +398,31 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
         "1. NO CONVERSATIONAL FILLER OR PREAMBLE: Never start with fluff like 'Sure!', 'Great question!', 'Here is what I found', or 'As an AI'. Jump directly into the single most important fact or insight in the very first sentence.\n"
         "2. HIGH INFORMATION DENSITY: Avoid high-level generic summaries. Include precise names, concrete mechanics, key dates, or key figures where relevant, explaining the 'why' and 'how' behind concepts.\n"
         "3. OPTIMIZED FOR EAR COMPREHENSION: Write purely for spoken audio (Text-To-Speech). Use natural speech rhythm, varied sentence lengths, and elegant transitions. Never use markdown, bullet points, asterisks, numbered lists, special symbols, or visual formatting.\n"
-        "4. SYNTHESIZE SEARCH & REASONING: Seamlessly integrate internal reasoning and provided live web search context into a fluid, confident, and masterfully crafted spoken response.\n"
+        "4. SYNTHESIZE SEARCH & DEEP REASONING: Seamlessly integrate internal reasoning and the provided live visited web pages into a fluid, confident, and masterfully crafted spoken response.\n"
         "5. CONCISE YET RICH DURATION: Keep responses to roughly 3 to 4 well-paced sentences (around 50 to 75 spoken words). Ensure every word delivers value."
     )
     if is_followup:
         system_message += " This is a follow-up question. Answer directly and concisely, building naturally on the context."
     
-    # Perform live web search for real-time context
+    # Perform live multi-page web search and browsing
     search_context = fetch_live_search(new_question)
     enhanced_question = new_question
     if search_context:
-        logger.info("Enriched query with live web search results.")
-        enhanced_question += f"\n\n[Live Web Search Context]:\n{search_context}"
+        logger.info("Enriched query with deep multi-page live web search context.")
+        enhanced_question += f"\n\n[Live Web Browsing & Visited Pages]:\n{search_context}"
     
     history_limit = 10 if not is_followup else 5
     
     models_to_try = [
-        os.environ.get("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0"),
+        os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         "us.amazon.nova-pro-v1:0",
         "amazon.nova-pro-v1:0",
         "us.amazon.nova-lite-v1:0",
-        "amazon.nova-lite-v1:0",
-        "meta.llama3-70b-instruct-v1:0",
-        "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+        "meta.llama3-70b-instruct-v1:0"
     ]
     
     # Remove duplicates while preserving order
@@ -424,6 +462,7 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                     "temperature": 0.7
                 }
             else:
+                # Anthropic Claude 3.7 / Sonnet with High Extended Thinking / Reasoning
                 claude_messages = []
                 for question, answer in chat_history[-history_limit:]:
                     claude_messages.append({"role": "user", "content": question})
@@ -432,8 +471,12 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                 
                 payload = {
                     "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 2048,
+                    "max_tokens": 5120,
                     "temperature": 1.0,
+                    "thinking": {
+                        "type": "enabled",
+                        "budget_tokens": 3072
+                    },
                     "system": system_message,
                     "messages": claude_messages
                 }
@@ -464,32 +507,33 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                 else:
                     logger.warning(f"Bedrock model '{model_id}' HTTP returned status {res.status_code}: {res.text[:150]}")
 
-            # Method 2: boto3 SDK
-            client_kwargs = {"region_name": current_region}
+            # Method 2: boto3 SDK (if full access key & secret key are configured)
             if current_access_key and current_secret_key:
-                client_kwargs["aws_access_key_id"] = current_access_key
-                client_kwargs["aws_secret_access_key"] = current_secret_key
-            
-            bedrock_runtime = boto3.client("bedrock-runtime", **client_kwargs)
-            response = bedrock_runtime.invoke_model(
-                modelId=model_id,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(payload)
-            )
-            response_body = json.loads(response["body"].read().decode("utf-8"))
-            if "nova" in model_id:
-                raw_text = response_body.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
-            elif "llama" in model_id:
-                raw_text = response_body.get("generation", "")
-            else:
-                raw_text = ""
-                for block in response_body.get("content", []):
-                    if block.get("type") == "text":
-                        raw_text += block.get("text", "")
-            if raw_text:
-                logger.info(f"Successfully generated response with boto3 Bedrock model '{model_id}'")
-                return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
+                client_kwargs = {
+                    "region_name": current_region,
+                    "aws_access_key_id": current_access_key,
+                    "aws_secret_access_key": current_secret_key
+                }
+                bedrock_runtime = boto3.client("bedrock-runtime", **client_kwargs)
+                response = bedrock_runtime.invoke_model(
+                    modelId=model_id,
+                    contentType="application/json",
+                    accept="application/json",
+                    body=json.dumps(payload)
+                )
+                response_body = json.loads(response["body"].read().decode("utf-8"))
+                if "nova" in model_id:
+                    raw_text = response_body.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+                elif "llama" in model_id:
+                    raw_text = response_body.get("generation", "")
+                else:
+                    raw_text = ""
+                    for block in response_body.get("content", []):
+                        if block.get("type") == "text":
+                            raw_text += block.get("text", "")
+                if raw_text:
+                    logger.info(f"Successfully generated response with boto3 Bedrock model '{model_id}'")
+                    return clean_text_for_speech(raw_text), ["Tell me more", "Explain in detail"]
         except Exception as e:
             logger.warning(f"Amazon Bedrock call for model '{model_id}' failed: {e}")
 
