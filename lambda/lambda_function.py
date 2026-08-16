@@ -21,12 +21,13 @@ if os.path.exists(env_file_path):
                 k, v = line.split("=", 1)
                 os.environ[k.strip()] = v.strip()
 
-# Amazon Bedrock configuration
-bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-3-5-haiku-20241022-v1:0")
+# Amazon Bedrock and Tavily configuration
+bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
 aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID", os.environ.get("BEDROCK_ACCESS_KEY", ""))
 aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY", os.environ.get("BEDROCK_SECRET_KEY", ""))
 aws_region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
 bedrock_api_key = os.environ.get("BEDROCK_API_KEY", os.environ.get("AWS_BEARER_TOKEN", ""))
+tavily_api_key = os.environ.get("TAVILY_API_KEY", "")
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -221,6 +222,42 @@ import xml.etree.ElementTree as ET
 import html
 from concurrent.futures import ThreadPoolExecutor
 
+def fetch_tavily_search(query, max_results=3):
+    """Fetches real-time, comprehensive web search results using Tavily Search API."""
+    key = os.environ.get("TAVILY_API_KEY", tavily_api_key)
+    if not key:
+        return None
+    try:
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": key,
+            "query": query,
+            "search_depth": "basic",
+            "include_answer": True,
+            "max_results": max_results
+        }
+        res = requests.post(url, json=payload, timeout=4)
+        if res.ok:
+            data = res.json()
+            answer = data.get("answer")
+            results = data.get("results", [])
+            
+            context_blocks = []
+            if answer:
+                context_blocks.append(f"Direct Search Answer: {answer}")
+            for idx, item in enumerate(results, 1):
+                title = item.get("title", "Untitled")
+                url_item = item.get("url", "")
+                snippet = item.get("content", "")
+                context_blocks.append(f"[Source #{idx}: {title} ({url_item})]\n{snippet}")
+            
+            if context_blocks:
+                logger.info(f"Tavily search retrieved {len(results)} live results for query: {query}")
+                return "\n\n".join(context_blocks)
+    except Exception as e:
+        logger.warning(f"Tavily search error: {e}")
+    return None
+
 def extract_main_article_text(html_content, max_chars=1200):
     """Strips HTML tags, script, and style tags to extract clean main article body text."""
     clean = re.sub(r'<(script|style|head|footer|nav|header)[^>]*>.*?</\1>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
@@ -246,14 +283,17 @@ def scrape_single_website(target_url, timeout=3):
 
 def fetch_live_search(query, max_websites=3):
     """
-    Claude App style web browsing:
-    1. Discovers top matching website URLs.
-    2. Concurrently visits and scrapes full page contents of those websites.
-    3. Feeds readable website body content into Claude's reasoning context.
+    Live Web Search Pipeline:
+    1. Primary: Tavily AI Search API for high-precision live web search results.
+    2. Fallback: Concurrently scraped Bing News RSS / Wikipedia body content.
     """
+    # 1. Primary Tavily Search
+    tavily_context = fetch_tavily_search(query, max_results=max_websites)
+    if tavily_context:
+        return tavily_context
+
+    # 2. Fallback Discovery via RSS & Wikipedia
     target_urls = []
-    
-    # Step 1: Discover top URLs from Bing News RSS
     try:
         rss_url = f"https://www.bing.com/news/search?q={urllib.parse.quote(query)}&format=rss"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -274,7 +314,6 @@ def fetch_live_search(query, max_websites=3):
     except Exception as e:
         logger.warning(f"RSS link discovery error: {e}")
 
-    # Step 2: Fallback discover Wikipedia URLs
     if len(target_urls) < max_websites:
         try:
             wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&format=json&utf8=1"
@@ -291,9 +330,11 @@ def fetch_live_search(query, max_websites=3):
         except Exception as e:
             logger.warning(f"Wiki link discovery error: {e}")
 
+    if not target_urls:
+        return ""
+
     logger.info(f"Visiting and reading websites: {target_urls}")
 
-    # Step 3: Concurrently visit websites & extract body content
     scraped_pages = []
     with ThreadPoolExecutor(max_workers=max_websites) as executor:
         futures = [executor.submit(scrape_single_website, url) for url in target_urls]
@@ -302,7 +343,6 @@ def fetch_live_search(query, max_websites=3):
             if result:
                 scraped_pages.append(result)
 
-    # Step 4: Build formatted multi-website context block
     formatted_context = ""
     for idx, page in enumerate(scraped_pages, 1):
         formatted_context += f"\n--- [Website #{idx} Visited: {page['url']}] ---\n{page['content']}\n"
@@ -311,15 +351,8 @@ def fetch_live_search(query, max_websites=3):
 
 import boto3
 
-# Amazon Bedrock configuration
-bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
-aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID", os.environ.get("BEDROCK_ACCESS_KEY", ""))
-aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY", os.environ.get("BEDROCK_SECRET_KEY", ""))
-aws_region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
-bedrock_api_key = os.environ.get("BEDROCK_API_KEY", os.environ.get("AWS_BEARER_TOKEN", ""))
-
 def generate_ai_response(chat_history, new_question, is_followup=False):
-    """Generates an AI response using Claude Sonnet 5 / 3.7 with Medium Reasoning and Web Search on Bedrock."""
+    """Generates an AI response with real-time web search and Bedrock LLM reasoning."""
     system_message = (
         "You are Claude, an exceptionally intelligent, articulate, and sharp AI voice companion speaking out loud through Alexa.\n"
         "Your objective is to provide authoritative, highly insightful, and captivating answers that feel remarkably smart without ever sounding robotic, generic, or formulaic.\n\n"
@@ -333,7 +366,7 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
     if is_followup:
         system_message += " This is a follow-up question. Answer directly and concisely, building naturally on the context."
     
-    # Perform live web search for context
+    # Perform live web search for real-time context
     search_context = fetch_live_search(new_question)
     enhanced_question = new_question
     if search_context:
@@ -342,18 +375,30 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
     
     history_limit = 10 if not is_followup else 5
     
-    # Models to try in order of preference (Claude Sonnet 5 / 3.7 -> Nova Pro / Lite)
     models_to_try = [
-        bedrock_model_id,
+        os.environ.get("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0"),
+        "us.amazon.nova-pro-v1:0",
+        "amazon.nova-pro-v1:0",
+        "us.amazon.nova-lite-v1:0",
+        "amazon.nova-lite-v1:0",
+        "meta.llama3-70b-instruct-v1:0",
         "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
         "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "us.amazon.nova-pro-v1:0",
-        "us.amazon.nova-lite-v1:0"
+        "us.anthropic.claude-3-5-haiku-20241022-v1:0"
     ]
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    models_to_try = [m for m in models_to_try if not (m in seen or seen.add(m))]
+    
+    current_region = os.environ.get("AWS_REGION", "us-east-1")
+    current_api_key = os.environ.get("BEDROCK_API_KEY", bedrock_api_key)
+    current_access_key = os.environ.get("AWS_ACCESS_KEY_ID", aws_access_key_id)
+    current_secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", aws_secret_access_key)
     
     for model_id in models_to_try:
         try:
-            logger.info(f"Attempting Amazon Bedrock model '{model_id}' in region '{aws_region}'...")
+            logger.info(f"Attempting Amazon Bedrock model '{model_id}' in region '{current_region}'...")
             
             # Format payload based on model family
             if "nova" in model_id:
@@ -368,6 +413,16 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                     "system": [{"text": system_message}],
                     "messages": nova_messages
                 }
+            elif "llama" in model_id:
+                prompt_str = f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n{system_message}<|eot_id|>"
+                for question, answer in chat_history[-history_limit:]:
+                    prompt_str += f"<|start_header_id|>user<|end_header_id|>\n{question}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n{answer}<|eot_id|>"
+                prompt_str += f"<|start_header_id|>user<|end_header_id|>\n{enhanced_question}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
+                payload = {
+                    "prompt": prompt_str,
+                    "max_gen_len": 1024,
+                    "temperature": 0.7
+                }
             else:
                 claude_messages = []
                 for question, answer in chat_history[-history_limit:]:
@@ -375,24 +430,19 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                     claude_messages.append({"role": "assistant", "content": answer})
                 claude_messages.append({"role": "user", "content": enhanced_question})
                 
-                # Payload with Extended Thinking / Reasoning at Medium (budget: 1024 tokens)
                 payload = {
                     "anthropic_version": "bedrock-2023-05-31",
                     "max_tokens": 2048,
                     "temperature": 1.0,
-                    "thinking": {
-                        "type": "enabled",
-                        "budget_tokens": 1024
-                    },
                     "system": system_message,
                     "messages": claude_messages
                 }
 
             # Method 1: Bearer Token (HTTP) if provided
-            if bedrock_api_key:
-                url = f"https://bedrock-runtime.{aws_region}.amazonaws.com/model/{model_id}/invoke"
+            if current_api_key:
+                url = f"https://bedrock-runtime.{current_region}.amazonaws.com/model/{model_id}/invoke"
                 headers = {
-                    "Authorization": f"Bearer {bedrock_api_key}",
+                    "Authorization": f"Bearer {current_api_key}",
                     "Content-Type": "application/json",
                     "Accept": "application/json"
                 }
@@ -401,8 +451,9 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                     res_data = res.json()
                     if "nova" in model_id:
                         raw_text = res_data.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+                    elif "llama" in model_id:
+                        raw_text = res_data.get("generation", "")
                     else:
-                        # Extract SPOKEN text block only, excluding thinking reasoning block
                         raw_text = ""
                         for block in res_data.get("content", []):
                             if block.get("type") == "text":
@@ -414,10 +465,10 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
                     logger.warning(f"Bedrock model '{model_id}' HTTP returned status {res.status_code}: {res.text[:150]}")
 
             # Method 2: boto3 SDK
-            client_kwargs = {"region_name": aws_region}
-            if aws_access_key_id and aws_secret_access_key:
-                client_kwargs["aws_access_key_id"] = aws_access_key_id
-                client_kwargs["aws_secret_access_key"] = aws_secret_access_key
+            client_kwargs = {"region_name": current_region}
+            if current_access_key and current_secret_key:
+                client_kwargs["aws_access_key_id"] = current_access_key
+                client_kwargs["aws_secret_access_key"] = current_secret_key
             
             bedrock_runtime = boto3.client("bedrock-runtime", **client_kwargs)
             response = bedrock_runtime.invoke_model(
@@ -429,6 +480,8 @@ def generate_ai_response(chat_history, new_question, is_followup=False):
             response_body = json.loads(response["body"].read().decode("utf-8"))
             if "nova" in model_id:
                 raw_text = response_body.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+            elif "llama" in model_id:
+                raw_text = response_body.get("generation", "")
             else:
                 raw_text = ""
                 for block in response_body.get("content", []):
